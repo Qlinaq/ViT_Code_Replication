@@ -23,23 +23,52 @@ class PatchEmbed(nn.Module):
         self.norm=norm_layer(num_features) if norm_layer else nn.Identity()
     
     def forward(self,x):
-        # batch, 3, 224, 224 -> batch, 768, 14, 14
+        """
+        前向传播函数
+        :param x: 输入图像张量，形状为 (batch, channels, height, width)
+        :return: 处理后的张量，形状为 (batch, num_patches, embedding_dim)
+        """
+        # 将输入图像通过卷积层self.proj进行分块和线性嵌入
+        # 形状变化: (batch, 3, 224, 224) -> (batch, 768, 14, 14)
         x=self.proj(x)
         if self.flatten:
-            x=x.flatten(2).transpose(1,2)  # batch, 768, 14, 14 -> batch, 768, 196 -> batch, 196, 768
+            # 将特征图展平并将维度转换
+            # 形状变化: (batch, 768, 14, 14) -> (batch, 768, 196) -> (batch, 196, 768)
+            x=x.flatten(2).transpose(1,2)
+        # 对嵌入后的块进行归一化处理
         x=self.norm(x)
 
         return x
 
-patch_embed = PatchEmbed(input_shape=[224, 224], patch_size=16, in_channels=3, num_features=768)
-x = torch.randn(1, 3, 224, 224)
-output = patch_embed(x)
-print("Output shape:", output.shape)
+class Add_CLS_Token(nn.Module):
+    """CLS Token 是一个特殊的向量，表示分类信息
+    它会与图像的 Patch Tokens 一起输入到 Transformer Encoder 中，并在最终用于分类任务"""
+    def __init__(self,embed_dim=768):
+        super(Add_CLS_Token,self).__init__()
+        self.cls_token=nn.Parameter(torch.zeros(1,1,embed_dim)) #初始化CLS Token
+    def forward(self,x):
+        """
+        前向传播函数
+        :param x: 输入张量，形状为 (batch, num_patches, embedding_dim)
+        :return: 包含 CLS Token 的输出张量，形状为 (batch, num_patches+1, embedding_dim)
+        """
+        
+        x=torch.cat([self.cls_token.expand(x.shape[0],-1,-1),x],dim=1) #在第1维拼接CLS Token])
 
+        return x
+class Add_Position_Embed(nn.Module):
+    """位置编码(Position Embedding)是为了让模型能够感知输入数据中各个部分的相对或绝对位置
+    在ViT中,位置编码会与图像的 Patch Tokens 一起输入到 Transformer Encoder 中"""
+    def __init__(self,num_patches=196,embed_dim=768):
+        super(Add_Position_Embed,self).__init__()
+        self.pos_embed=nn.Parameter(torch.zeros(1,num_patches+1,embed_dim)) #初始化位置编码
 
+    def forward(self,x):
+        """
+        前向传播函数
+        :param x: 输入张量，形状为 (batch, num_patches+1, embedding_dim)
+        :return: 添加位置编码后的输出张量，形状为 (batch, num_patches+1, embedding_dim)
+        """
+        x=x+self.pos_embed #将位置编码加到输入张量上
 
-
-
-
-
-
+        return x
