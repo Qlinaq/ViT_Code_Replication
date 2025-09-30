@@ -1,0 +1,33 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        
+        {
+            "name": "Python: Current File (LLDB)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${command:python.interpreterPath}",
+            "args": ["${file}"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Python: Verify.py (LLDB)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${command:python.interpreterPath}",
+            "args": ["${workspaceFolder}/Verify.py"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Python: ViT.py (LLDB)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${command:python.interpreterPath}",
+            "args": ["${workspaceFolder}/ViT.py"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        }
+    ]
+}
