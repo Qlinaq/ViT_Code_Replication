@@ -88,23 +88,81 @@ class Multi_Head_Attention(nn.Module):
         self.proj_drop=nn.Dropout(proj_drop_rate)
 
     def forward(self,x):
-        B,N,C=x.shape 
-        Atten_x=self.big_qkv_with_W_for_heads(x) 
+        # 获取输入张量的形状: (B: Batch size, N: Sequence length, C: Embedding dimension)
+        B,N,C=x.shape
+        # 1. 通过一个大的线性层一次性生成所有heads的 Q, K, V
+        # 输入 x 形状: (B, N, C)
+        # 输出 Atten_x 形状: (B, N, 3 * C)
+        Atten_x=self.big_qkv_with_W_for_heads(x)
+        # 2. 重塑(reshape)并变维(permute)以分离 Q, K, V 并为多头准备
+        # 目标形状: (3, B, num_heads, N, head_dim) where head_dim = C // num_heads
         Atten_x=Atten_x.reshape(B,N,3,self.num_heads,C//self.num_heads)
-        Atten_x=Atten_x.permute(2,0,3,1,4) # (3,B,num_heads,N,C//num_heads)
-        q,k,v=Atten_x[0],Atten_x[1],Atten_x[2] #每个头的查询、键、值向量
+        Atten_x=Atten_x.permute(2,0,3,1,4)
+        # 3. 分别获取 Q, K, V
+        # q, k, v 形状: (B, num_heads, N, head_dim)
+        q,k,v=Atten_x[0],Atten_x[1],Atten_x[2]
 
 
-        # 计算注意力分数
-        atten=(q@k.transpose(2,3))*self.scale #(B,num_heads,N,N)
-        atten=atten.softmax(dim=-1) #对注意力分数进行归一化
-        atten=self.atten_drop(atten) #注意力权重的 dropout 层，用于防止过拟合
-        atten=(atten@v) #(B,num_heads,N,C//num_heads)
+        # 4. 计算注意力分数 (Scaled Dot-Product Attention)
+        # (q @ k.transpose(-2, -1)) -> (B, num_heads, N, N)
+        atten=(q@k.transpose(-2,-1))*self.scale
+        # 5. 对注意力分数在最后一个维度上进行 softmax 归一化
+        atten=atten.softmax(dim=-1)
+        # 6. 对注意力分数应用 dropout 正则化，防止过拟合
+        atten=self.atten_drop(atten)
+        # 7. 将注意力权重与 V 相乘，得到加权的 V
+        # (atten @ v) -> (B, num_heads, N, head_dim)
+        atten=(atten@v)
 
-        atten=atten.transpose(-2,-1).reshape(B,N,C) # (B,N,C)
+        # 8. 重塑(reshape)输出，将多头结果拼接起来
+        # transpose(1, 2) -> (B, N, num_heads, head_dim)
+        # reshape(B, N, C) -> (B, N, C)
+        atten=atten.transpose(1,2).reshape(B,N,C)
 
+        # 9. 通过最终的线性层和 dropout 层
         atten=self.proj_AfterCatResult(atten)
         atten=self.proj_drop(atten)
 
         return atten
+
+def GELU(x):
+    # result=0.5 * x * (1 + torch.erf(x / math.sqrt(2))) #实际的GELU激活函数
+    result=0.5*x*(1+torch.tanh(np.sqrt(2/np.pi)*(x+0.044715*torch.pow(x,3)))) #近似GELU激活函数方便计算
+    return result
+
+
+
+class MLP(nn.Module):
+    def __init__(self,in_features,hidden_features=None,out_features=None,act_layer=GELU,drop_probs=(0.1, 0.1)):
+        super(MLP,self).__init__()
+        out_features=out_features or in_features #默认输出特征数与输入特征数相同,如果指定了输出特征数,则使用指定的输出特征数
+        hidden_features=hidden_features or in_features #默认隐藏层特征数与输入特征数相同，如果指定了隐藏层特征数,则使用指定的隐藏层特征数
+        
+        self.l1=nn.Linear(in_features,hidden_features)
+        self.act=act_layer()
+        self.l2=nn.Linear(hidden_features,out_features)
+
+        #drop_probs是创建一个包含两个元素的列表,每个元素的值都是drop,表示两个dropout层的丢弃概率
+        #未来可能会对两个dropout层使用不同的丢弃概率
+        self.drop1=nn.Dropout(drop_probs[0])
+        self.drop2=nn.Dropout(drop_probs[1])
+
+    def forward(self,x):
+        #x=batch, 197, 768
+
+        x=self.l1(x) #batch, 197, 768-> batch, 197, 3072
+        
+        x=self.act(x)#batch, 197, 3072 -> batch, 197, 3072
+        
+        x=self.drop1(x)#batch, 197, 3072 -> batch, 197, 3072
+        
+        x=self.l2(x)#batch, 197, 3072 -> batch, 197, 768
+        
+        x=self.drop2(x)#batch, 197, 768 -> batch, 197, 768
+        
+        
+        return x
+
+        
+
 
