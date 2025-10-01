@@ -133,17 +133,31 @@ def GELU(x):
 
 
 class MLP(nn.Module):
-    def __init__(self,in_features,hidden_features=None,out_features=None,act_layer=GELU,drop_probs=(0.1, 0.1)):
+    def __init__(self,in_features,hidden_features=None,out_features=None,act_layer=nn.GELU,drop_probs=(0.1, 0.1)):
+        """
+        初始化 MLP(多层感知机)模块。
+
+        Args:
+            in_features (int): 输入特征的维度。
+            hidden_features (int, optional): 隐藏层特征的维度。如果为 None，则默认为 `in_features`。
+            out_features (int, optional): 输出特征的维度。如果为 None，则默认为 `in_features`。
+            act_layer (nn.Module, optional): 使用的激活函数。默认为 `nn.GELU`。
+            drop_probs (tuple[float], optional): 两个 Dropout 层的丢弃率。默认为 `(0.1, 0.1)`。
+        """
         super(MLP,self).__init__()
-        out_features=out_features or in_features #默认输出特征数与输入特征数相同,如果指定了输出特征数,则使用指定的输出特征数
-        hidden_features=hidden_features or in_features #默认隐藏层特征数与输入特征数相同，如果指定了隐藏层特征数,则使用指定的隐藏层特征数
+        # 如果未指定输出特征维度，则默认等于输入特征维度
+        out_features=out_features or in_features
+        # 如果未指定隐藏层特征维度，则默认等于输入特征维度
+        hidden_features=hidden_features or in_features
         
+        # 第一个全连接层
         self.l1=nn.Linear(in_features,hidden_features)
+        # 激活函数
         self.act=act_layer()
+        # 第二个全连接层
         self.l2=nn.Linear(hidden_features,out_features)
 
-        #drop_probs是创建一个包含两个元素的列表,每个元素的值都是drop,表示两个dropout层的丢弃概率
-        #未来可能会对两个dropout层使用不同的丢弃概率
+        # 定义两个 Dropout 层，可以为它们设置不同的丢弃率
         self.drop1=nn.Dropout(drop_probs[0])
         self.drop2=nn.Dropout(drop_probs[1])
 
@@ -162,7 +176,49 @@ class MLP(nn.Module):
         
         
         return x
+    
 
+def drop_path(x,drop_prob:float=0.,training:bool=False):
+    """
+    Drop Path (Stochastic Depth) implementation.
+    
+    Args:
+        x (torch.Tensor): Input tensor of shape (batch_size, ..., features).
+        drop_prob (float): Probability of dropping the path.
+        training (bool): Whether the model is in training mode.
         
+    Returns:
+        torch.Tensor: Output tensor after applying Drop Path.
+    """
+    #float=0. 是显示类型表示这是float类型的0 ，而不是默认的int类型的0
+    # 当 drop_prob 为 0 或者模型不在训练模式时，直接返回输入张量，不进行 Drop Path 操作
+    if drop_prob==0. or not training: 
+        return x
+    # 按照给定的丢弃率生成一个 0-1 之间的随机数
+    keep_prob=1-drop_prob
+    # 计算随机数的形状，以便在后续操作中进行广播
+    shape_for_rand=x.shape[0]+(x.ndim-1)*(1,)
 
+    # 生成与输入张量形状匹配的范围是[0,1)的随机张量,
+    random_tensor=torch.rand(shape_for_rand,dtype=x.dtype,device=x.device)
 
+    #加上keep_prob，方便后续的二值化
+    random_tensor=random_tensor+keep_prob
+
+    #二值化，生成0或1的张量,用来决定哪些样本被保留，以及后续对x的缩放
+    random_tensor=random_tensor.floor() 
+
+    #5 * 0.8 + 0 * 0.2 = 4，说明有80%的样本会被保留，20%的样本会被丢弃，0.8相当于keep_prob
+    # 1.通过与随机张量相乘来二值化 x，相当于乘0.8
+    #2.dropout后的x 通过除以keep_prob来缩放未被丢弃的样本，以保持期望值不变，相当于除0.8
+    output=random_tensor* x.div(keep_prob)
+
+    return output
+
+class Drop_Path(nn.Module):
+    def __init__(self,drop_prob=None):
+        super(Drop_Path,self).__init()
+        self.drop_prob=drop_prob
+
+    def forward(self,x):
+        return drop_path(x,self.drop_prob,self.training)
