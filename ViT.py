@@ -62,7 +62,7 @@ class Add_Position_Embed(nn.Module):
     def __init__(self,num_patches=196,embed_dim=768,drop_rate=0.1):
         super(Add_Position_Embed,self).__init__()
         self.pos_embed=nn.Parameter(torch.zeros(1,num_patches+1,embed_dim)) #初始化位置编码
-        self.droupout=nn.Dropout(p=drop_rate)         # 应用 dropout 正则化，请注意这里的 `droupout` 可能是 `dropout` 的拼写错误
+        self.dropout=nn.Dropout(p=drop_rate)         # 应用 dropout 正则化，请注意这里的 `droupout` 可能是 `dropout` 的拼写错误
 
     def forward(self,x):
         """
@@ -133,7 +133,7 @@ def GELU(x):
 
 
 class MLP(nn.Module):
-    def __init__(self,in_features,hidden_features=None,out_features=None,act_layer=nn.GELU,drop_probs=(0.1, 0.1)):
+    def __init__(self,in_features,hidden_features=None,out_features=None,act_layer=GELU,drop_probs=(0.1, 0.1)):
         """
         初始化 MLP(多层感知机)模块。
 
@@ -197,7 +197,7 @@ def drop_path(x,drop_prob:float=0.,training:bool=False):
     # 按照给定的丢弃率生成一个 0-1 之间的随机数
     keep_prob=1-drop_prob
     # 计算随机数的形状，以便在后续操作中进行广播
-    shape_for_rand=x.shape[0]+(x.ndim-1)*(1,)
+    shape_for_rand=(x.shape[0],)+(x.ndim-1)*(1,)
 
     # 生成与输入张量形状匹配的范围是[0,1)的随机张量,
     random_tensor=torch.rand(shape_for_rand,dtype=x.dtype,device=x.device)
@@ -217,7 +217,7 @@ def drop_path(x,drop_prob:float=0.,training:bool=False):
 
 class Drop_Path(nn.Module):
     def __init__(self,drop_prob=None):
-        super(Drop_Path,self).__init()
+        super(Drop_Path,self).__init__()
         self.drop_prob=drop_prob
 
     def forward(self,x):
