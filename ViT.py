@@ -71,7 +71,7 @@ class Add_Position_Embed(nn.Module):
         :return: 添加位置编码后的输出张量，形状为 (batch, num_patches+1, embedding_dim)
         """
         x=x+self.pos_embed #将位置编码加到输入张量上
-        x=self.droupout(x)
+        x=self.dropout(x)
 
         return x
 
@@ -133,7 +133,7 @@ def GELU(x):
 
 
 class MLP(nn.Module):
-    def __init__(self,in_features,hidden_features=None,out_features=None,act_layer=GELU,drop_probs=(0.1, 0.1)):
+    def __init__(self,in_features,hidden_features=None,out_features=None,act_layer=GELU,drop_probs=(0., 0.)):
         """
         初始化 MLP(多层感知机)模块。
 
@@ -142,7 +142,7 @@ class MLP(nn.Module):
             hidden_features (int, optional): 隐藏层特征的维度。如果为 None，则默认为 `in_features`。
             out_features (int, optional): 输出特征的维度。如果为 None，则默认为 `in_features`。
             act_layer (nn.Module, optional): 使用的激活函数。默认为 `nn.GELU`。
-            drop_probs (tuple[float], optional): 两个 Dropout 层的丢弃率。默认为 `(0.1, 0.1)`。
+            drop_probs (tuple[float], optional): 两个 Dropout 层的丢弃率。默认为 `(0., 0.)`。
         """
         super(MLP,self).__init__()
         # 如果未指定输出特征维度，则默认等于输入特征维度
@@ -222,3 +222,108 @@ class Drop_Path(nn.Module):
 
     def forward(self,x):
         return drop_path(x,self.drop_prob,self.training)
+
+class EncoderBlock(nn.Module):
+    def __init__(self,in_features,num_heads,mlp_ratio=4,qkv_bias=False,drop_probs=(0.,0.),
+                 attn_drop_rate=0.,proj_drop_rate=0.,drop_path_rate=0.,norm_layer=nn.LayerNorm):
+        super(EncoderBlock,self).__init__()
+        self.atten=Multi_Head_Attention(num_heads=num_heads,dim_of_patch=in_features,qkv_bias=qkv_bias,attn_drop_rate=attn_drop_rate,proj_drop_rate=proj_drop_rate)
+        self.layernorm1=norm_layer(in_features)
+        self.mlp=MLP(in_features=in_features,hidden_features=int(in_features*mlp_ratio),out_features=in_features,act_layer=GELU,drop_probs=drop_probs)
+        self.layernorm2=norm_layer(in_features)
+        self.drop_path=Drop_Path(drop_path_rate) if drop_path_rate>0. else nn.Identity()
+
+    def forward(self,x):
+        #residual connection
+        x=self.drop_path(self.atten(self.layernorm1(x)))+x
+        x=self.drop_path(self.mlp(self.layernorm2(x)))+x
+        return x
+
+class ViT(nn.Module):
+    # ViT模型的实现
+    def __init__(self,input_shape=[224,224],patch_size=16,in_channels=3,num_classes=1000,num_features=768,
+                 depth=12,drop_rate=0.1,num_heads=12,mlp_ratio=4., qkv_bias=True,attn_drop_rate=0.1,proj_drop_rate=0.1,drop_path_rate=0.1,
+                 act_layer=GELU,norm_layer=partial(nn.LayerNorm,eps=1e-6)):
+        super(ViT,self).__init__()
+
+#1.Patch嵌入
+        self.patch_embed=PatchEmbed(input_shape=input_shape,patch_size=patch_size,in_channels=in_channels,num_features=num_features,norm_layer=None,flatten=True)     
+        self.num_patches=self.patch_embed.num_patches
+#2.添加CLS Token
+        self.cls_token=Add_CLS_Token(embed_dim=num_features)        
+#3.添加位置编码
+        self.pos_embed=Add_Position_Embed(num_patches=self.num_patches,embed_dim=num_features,drop_rate=drop_rate)
+
+#4.为每层depth的EncoderBlock添加drop_path_rate
+        drop_path_rates=torch.linspace(0,drop_path_rate,depth).tolist()
+
+#5.EncoderBlock的堆叠
+        block=[]
+        for i in range(depth):
+            block.append(
+                EncoderBlock(in_features=num_features,num_heads=num_heads,mlp_ratio=mlp_ratio,qkv_bias=qkv_bias,
+                             drop_probs=(drop_rate,drop_rate),attn_drop_rate=attn_drop_rate,proj_drop_rate=proj_drop_rate,
+                             drop_path_rate=drop_path_rates[i],norm_layer=norm_layer)
+            )
+        self.blocks=nn.ModuleList(block)
+
+#6.Final normalization layer
+        self.norm=norm_layer(num_features)
+#7.Classification head
+        # 分类头，将特征表征从高维（如 768）映射到分类任务所需的输出维度（100 个类别）
+        # [batch_size, num_features]-> [batch_size, num_classes]
+        self.head=nn.Linear(num_features,num_classes)  if num_classes>0 else nn.Identity()
+#8.简单初始化参数
+        self.apply(self._init_weights)
+
+    def _init_weights(self,m):
+        """
+        初始化模型中不同模块的权重。
+        这个方法会被 `model.apply(_init_weights)` 调用，递归地应用到模型的所有子模块上。
+
+        Args:
+            m (nn.Module): 需要初始化权重的模块。
+        """
+        # isinstance() 函数用于检查一个对象是否是一个已知的类型。
+        if isinstance(m,nn.Linear):
+            # 如果是线性层 (nn.Linear)，则使用截断正态分布来初始化权重。
+            # 均值为 0，标准差为 0.02。
+            # 这是 ViT 论文中推荐的初始化方法。
+            nn.init.trunc_normal_(m.weight,std=0.02)
+            # 如果线性层有偏置项 (bias)，则将其初始化为 0。
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+        elif isinstance(m,nn.LayerNorm):
+            # 如果是层归一化 (LayerNorm)，则将其权重初始化为 1，偏置初始化为 0。
+            # 这使得 LayerNorm 在初始时近似于一个恒等变换。
+            nn.init.ones_(m.weight)
+            nn.init.zeros_(m.bias)
+        elif isinstance(m,nn.Conv2d):
+            # 如果是二维卷积层 (Conv2d)，则使用 Kaiming 正态分布初始化权重。
+            # 'fan_out' 模式保留了反向传播时权重的方差。
+            nn.init.kaiming_normal_(m.weight,mode='fan_out',nonlinearity='relu')
+            # 如果卷积层有偏置项，则将其初始化为 0。
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+        
+
+    def forward_features(self,x):
+        #1.Patch嵌入
+        x=self.patch_embed(x) # [B, 3, 224, 224] -> [B, 196, 768]
+        #2.添加CLS Token
+        x=self.cls_token(x)   # [B, 196, 768] -> [B, 197, 768]
+        #3.添加位置编码
+        x=self.pos_embed(x) # [B, 197, 768] -> [B, 197, 768]
+        #4.通过多个EncoderBlock
+        for block in self.blocks: 
+            x=block(x) # [B, 197, 768] -> [B, 197, 768]
+        #5.最终的归一化层
+        x=self.norm(x) # [B, 197, 768] -> [B, 197, 768]
+        #6.分类头   
+        cls=x[:,0] # 只取CLS Token对应的特征表示 [B, 197, 768] -> [B, 768]
+        return cls
+    
+    def forward(self,x):
+        x=self.forward_features(x) # [B, 3, 224, 224] -> [B, 768]
+        x=self.head(x)            # [B, 768] -> [B, 1000]
+        return x
