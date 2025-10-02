@@ -125,15 +125,15 @@ class Multi_Head_Attention(nn.Module):
 
         return atten
 
-def GELU(x):
-    # result=0.5 * x * (1 + torch.erf(x / math.sqrt(2))) #实际的GELU激活函数
-    result=0.5*x*(1+torch.tanh(np.sqrt(2/np.pi)*(x+0.044715*torch.pow(x,3)))) #近似GELU激活函数方便计算
+def GELU_fn(x):
+    # result=0.5 * x * (1 + torch.erf(x / math.sqrt(2))) #实际的GELU_fn激活函数
+    result=0.5*x*(1+torch.tanh(np.sqrt(2/np.pi)*(x+0.044715*torch.pow(x,3)))) #近似GELU_fn激活函数方便计算
     return result
 
 
 
 class MLP(nn.Module):
-    def __init__(self,in_features,hidden_features=None,out_features=None,act_layer=GELU,drop_probs=(0., 0.)):
+    def __init__(self,in_features,hidden_features=None,out_features=None,act_layer=GELU_fn,drop_probs=(0., 0.)):
         """
         初始化 MLP(多层感知机)模块。
 
@@ -141,7 +141,7 @@ class MLP(nn.Module):
             in_features (int): 输入特征的维度。
             hidden_features (int, optional): 隐藏层特征的维度。如果为 None，则默认为 `in_features`。
             out_features (int, optional): 输出特征的维度。如果为 None，则默认为 `in_features`。
-            act_layer (nn.Module, optional): 使用的激活函数。默认为 `nn.GELU`。
+            act_layer (nn.Module, optional): 使用的激活函数。默认为 `nn.GELU_fn`。
             drop_probs (tuple[float], optional): 两个 Dropout 层的丢弃率。默认为 `(0., 0.)`。
         """
         super(MLP,self).__init__()
@@ -229,7 +229,7 @@ class EncoderBlock(nn.Module):
         super(EncoderBlock,self).__init__()
         self.atten=Multi_Head_Attention(num_heads=num_heads,dim_of_patch=in_features,qkv_bias=qkv_bias,attn_drop_rate=attn_drop_rate,proj_drop_rate=proj_drop_rate)
         self.layernorm1=norm_layer(in_features)
-        self.mlp=MLP(in_features=in_features,hidden_features=int(in_features*mlp_ratio),out_features=in_features,act_layer=GELU,drop_probs=drop_probs)
+        self.mlp=MLP(in_features=in_features,hidden_features=int(in_features*mlp_ratio),out_features=in_features,act_layer=GELU_fn,drop_probs=drop_probs)
         self.layernorm2=norm_layer(in_features)
         self.drop_path=Drop_Path(drop_path_rate) if drop_path_rate>0. else nn.Identity()
 
@@ -243,7 +243,7 @@ class ViT(nn.Module):
     # ViT模型的实现
     def __init__(self,input_shape=[224,224],patch_size=16,in_channels=3,num_classes=1000,num_features=768,
                  depth=12,drop_rate=0.1,num_heads=12,mlp_ratio=4., qkv_bias=True,attn_drop_rate=0.1,proj_drop_rate=0.1,drop_path_rate=0.1,
-                 act_layer=GELU,norm_layer=partial(nn.LayerNorm,eps=1e-6)):
+                 act_layer=GELU_fn,norm_layer=partial(nn.LayerNorm,eps=1e-6)):
         super(ViT,self).__init__()
 
 #1.Patch嵌入
