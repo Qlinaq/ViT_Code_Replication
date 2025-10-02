@@ -12,13 +12,13 @@ device = "cuda:0" if torch.cuda.is_available() else "cpu"
 #num_features=768 is mannually set for ViT-B/16	
 class PatchEmbed(nn.Module):
     #[B, C, H, W] as input
-    def __init__(self,input_shape=[224,224],patch_size=16,in_channels=3,num_features=768, norm_layer=None,flattn=True):
+    def __init__(self,input_shape=[224,224],patch_size=16,in_channels=3,num_features=768, norm_layer=None,flatten=True):
         super(PatchEmbed,self).__init__()
         self.num_patches=(input_shape[0]//patch_size) * (input_shape[1]//patch_size) #not / but //
         self.proj=nn.Conv2d(in_channels,num_features,kernel_size=patch_size,stride=patch_size,)#定义卷积层，
         #将输入图像 （224x224）分割成 patch_size x patch_size 的小块，同时proj到 一个高维空间num_features 维度
         #卷积后：[B, num_features, H/patch_size, W/patch_size]
-        self.flattn=flattn #展平后：[B, num_features, num_patches]
+        self.flatten=flatten #展平后：[B, num_features, num_patches]
         #最后归一化，link CNN and Transformer
         self.norm=norm_layer(num_features) if norm_layer else nn.Identity()
     
@@ -31,10 +31,10 @@ class PatchEmbed(nn.Module):
         # 将输入图像通过卷积层self.proj进行分块和线性嵌入
         # 形状变化: (batch, 3, 224, 224) -> (batch, 768, 14, 14)
         x=self.proj(x)
-        if self.flattn:
+        if self.flatten:
             # 将特征图展平并将维度转换
             # 形状变化: (batch, 768, 14, 14) -> (batch, 768, 196) -> (batch, 196, 768)
-            x=x.flattn(2).transpose(1,2)
+            x=x.flatten(2).transpose(1,2)
         # 对嵌入后的块进行归一化处理
         x=self.norm(x)
 
@@ -252,7 +252,7 @@ class ViT(nn.Module):
         self.old_feature_shape=[int (224//patch_size),int(224//patch_size)]
         num_patches_old = self.old_feature_shape[0] * self.old_feature_shape[1]
 #1.Patch嵌入
-        self.patch_embed=PatchEmbed(input_shape=input_shape,patch_size=patch_size,in_channels=in_channels,num_features=num_features,norm_layer=None,flattn=True)     
+        self.patch_embed=PatchEmbed(input_shape=input_shape,patch_size=patch_size,in_channels=in_channels,num_features=num_features,norm_layer=None,flatten=True)     
         self.num_patches=self.patch_embed.num_patches
 #2.添加CLS Token
         self.cls_token = nn.Parameter(torch.zeros(1, 1, num_features))
@@ -345,7 +345,7 @@ class ViT(nn.Module):
         
         # 3.5 恢复形状
         # 1, 768, new_H, new_W -> 1, 196, 768
-        image_token_pe=image_token_pe.permute(0,2,3,1).flattn(1,2)
+        image_token_pe=image_token_pe.permute(0,2,3,1).flatten(1,2)
 
         # 3.6 拼接cls_token和patch_token
         # [1, 1, 768] + [1, 196, 768] -> [1, 197, 768]
