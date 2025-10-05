@@ -37,7 +37,6 @@ Both models support image classification on datasets like CIFAR-10/100 and can r
 - **Input resolution:** Flexible (default 224×224, position embedding interpolates automatically)  
 - **Implements:** The architecture from [arXiv:2010.11929](https://arxiv.org/abs/2010.11929)
 
----
 
 ## 🚀 Training Setup for ViT_Smaller
 
@@ -50,18 +49,14 @@ Both models support image classification on datasets like CIFAR-10/100 and can r
 - **Epochs:** 20  
 - **Environment:** Colab T4, Mac M2 Pro (MPS), CUDA, CPU
 
----
 
 ## 📊 Training Results (Colab GPU)
 
-Below is a screenshot of 20 epochs training on Colab + T4 GPU:
-
-![ViT Smaller Training Log](attachment:image)
-
 - **Final validation accuracy (Val Acc):** `0.6451` (64.51%)
-- **Loss:** Both train and validation loss decrease steadily as accuracy increases, indicating effective learning.
+- **Final validation loss (Val Loss):** `1.0288` 
 
----
+- Both train and validation loss decrease steadily as accuracy increases, indicating effective learning.
+
 
 ## ⚠️ Note on Mac M2 (MPS) & ViT-B/16
 
@@ -75,14 +70,9 @@ Below is a screenshot of 20 epochs training on Colab + T4 GPU:
 ## 🛠️ Quick Start
 
 ```bash
-# 1. Clone the repository
+# Clone the repository
 git clone https://github.com/your-repo-url/ViT_Smaller.git
 
-# 2. Install dependencies
-pip install torch torchvision
-
-# 3. Train ViT_Smaller
-python train_cifar_vit_small.py
 ```
 
 - **Change dataset:** Edit `dataset_name` in `train_cifar_vit_small.py` to `"CIFAR100"`
