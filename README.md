@@ -1,7 +1,5 @@
 # ViT_Code_Replication
-简单复现
-ViT with ViT—Base-B/16. 
-
+复现base ViT
 This is a project for replicating the Vision Transformer (ViT) base model (ViT-B/16). The project includes Chinese and English comments for ease of study and reference。
 
 # ViT_Smaller and ViT-B/16: Vision Transformers for Image Classification
@@ -12,7 +10,6 @@ This project implements two Vision Transformer (ViT) models for image classifica
 
 Both models support image classification on datasets like CIFAR-10/100 and can run on Apple Silicon (MPS), Google Colab GPUs, or standard CUDA/CPU environments.
 
----
 
 ## 📦 Model Architectures
 
