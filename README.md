@@ -77,7 +77,6 @@ Below is a screenshot of 20 epochs training on Colab + T4 GPU:
 ```bash
 # 1. Clone the repository
 git clone https://github.com/your-repo-url/ViT_Smaller.git
-cd ViT_Smaller
 
 # 2. Install dependencies
 pip install torch torchvision
@@ -87,9 +86,9 @@ python train_cifar_vit_small.py
 ```
 
 - **Change dataset:** Edit `dataset_name` in `train_cifar_vit_small.py` to `"CIFAR100"`
-- **Change input size:** Edit `input_shape=(128,128)`
+- **Change input size:** Edit `input_shape=（96，96）/(128,128)/（225，225）`
+- **Change batch size:** Edit `batch_size = 4/8/16`
 
----
 
 ## 🗂️ Code Structure
 
@@ -99,7 +98,6 @@ python train_cifar_vit_small.py
 | `train_cifar_vit_small.py`  | Training script for CIFAR-10/100 (includes augmentation, scheduler)|
 | `ViT_different_shape.py`    | Full ViT-B/16 implementation (12 layers, 768 dim, flexible input)  |
 
----
 
 ## 🔎 Inference with ViT-B/16
 
@@ -119,7 +117,6 @@ with torch.no_grad():
 ```
 - **Input shape is flexible:** The model automatically resizes position embeddings for different image sizes.
 
----
 
 ## 🔁 Reproducibility
 
@@ -146,14 +143,10 @@ def set_seed(seed=42):
 set_seed(42)
 ```
 
----
 
 ## 📒 References
 
 - [An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale](https://arxiv.org/abs/2010.11929)
 - [PyTorch Documentation](https://pytorch.org/)
 
----
 
-Feel free to request an extended English version, experiment report, or additional result tables!
-```
