@@ -132,7 +132,7 @@ class EncoderBlock(nn.Module):
         return x
 
 # -------- ViT Small --------
-class ViT_Small(nn.Module):
+class ViT_Small_SPT_LSA(nn.Module):
     def __init__(self, input_shape=[224, 224], patch_size=16, in_channels=3, num_classes=10,
                  dim=384, depth=8, num_heads=6, mlp_ratio=4.0,
                  qkv_bias=True, drop_rate=0.1, attn_drop_rate=0.0, proj_drop_rate=0.0, drop_path_rate=0.0,
@@ -207,9 +207,9 @@ class ViT_Small(nn.Module):
         x = self.head(x)
         return x
 
-def vit_small(input_shape=[224, 224], num_classes=10):
-    return ViT_Small(input_shape=input_shape, num_classes=num_classes).to(device)
+def vit_small_SPT_LSA(input_shape=[224, 224], num_classes=10):
+    return ViT_Small_SPT_LSA(input_shape=input_shape, num_classes=num_classes).to(device)
 
 if __name__ == "__main__":
-    model = vit_small(input_shape=[128, 128], num_classes=10)
+    model = vit_small_SPT_LSA(input_shape=[128, 128], num_classes=10)
     print(model)

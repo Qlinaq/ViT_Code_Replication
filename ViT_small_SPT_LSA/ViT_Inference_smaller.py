@@ -1,5 +1,5 @@
 import torch
-from ViT_smaller_SPT_LSA import vit_small
+from ViT_smaller_SPT_LSA import vit_small_SPT_LSA as vit_small
 
 # 配置
 input_shape = [256 , 256]   # 输入图片分辨率

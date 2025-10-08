@@ -5,7 +5,6 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
-# 设备优先 MPS
 if torch.backends.mps.is_available():
     device = "mps"
 else:
@@ -14,9 +13,9 @@ else:
 if hasattr(torch, "set_float32_matmul_precision"):
     torch.set_float32_matmul_precision("high")
 
-from ViT_smaller_SPT_LSA import vit_small  # 同目录下
+from ViT_smaller import vit_small  # 同目录下
 
-def get_dataloaders(dataset_name="CIFAR10", input_shape=(128, 128), batch_size=8, num_workers=2):
+def get_dataloaders(dataset_name="CIFAR10", input_shape=(32, 32), batch_size=8, num_workers=2):
     train_tf = transforms.Compose([
         transforms.Resize(input_shape),
         transforms.RandomHorizontalFlip(),
@@ -65,7 +64,7 @@ def main():
     print(f"Using device: {device}")
 
     dataset_name = "CIFAR10"     # 改为 "CIFAR100" 可切换
-    input_shape = (128, 128)     # 内存紧张可用 (96,96)
+    input_shape = (32, 32)     # 内存紧张可用 (96,96)
     batch_size = 8           # 不够就降到 16/8
     epochs = 20
     lr = 3e-4

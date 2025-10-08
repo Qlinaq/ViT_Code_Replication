@@ -15,9 +15,9 @@ else:
 if hasattr(torch, "set_float32_matmul_precision"):
     torch.set_float32_matmul_precision("high")
 
-from ViT_smaller_SPT_LSA import vit  # 确保同目录下有 ViT_different_shape.py
+from ViT_smaller import vit  # 确保同目录下有 ViT_different_shape.py
 
-def get_dataloaders(dataset_name="CIFAR10", input_shape=(96,96), batch_size=4, num_workers=2):
+def get_dataloaders(dataset_name="CIFAR10", input_shape=(32,32), batch_size=4, num_workers=2):
     # 数据增强与预处理
     train_tf = transforms.Compose([
         transforms.Resize(input_shape),
@@ -67,9 +67,9 @@ def main():
     print(f"Using device: {device}")
     # 配置
     dataset_name = "CIFAR10"      # 改成 "CIFAR100" 即可切换
-    input_shape = (96, 96)      # 可改为 (96,96) 或 (160,160)；越小越省内存
-    batch_size = 4              # 继续 OOM 就降到 8/4
-    epochs = 10
+    input_shape = (32, 32)     # 可改为 (96,96) 或 (160,160)；越小越省内存
+    batch_size = 4           # 继续 OOM 就降到 8/4
+    epochs = 20
     lr = 3e-4
     weight_decay = 0.05
     num_workers = 2
