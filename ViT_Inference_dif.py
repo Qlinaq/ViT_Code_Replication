@@ -39,7 +39,6 @@ predicted_prob = probabilities[0, predicted_class_idx].item()
 
 # ====== 5. 映射类别索引到类名（ImageNet） ======
 # 下载并放置 imagenet_class_index.json 文件到本目录
-# 链接: https://raw.githubusercontent.com/anishathalye/imagenet-simple-labels/master/imagenet_class_index.json
 
 with open("imagenet_class_index.json", "r") as f:
     class_idx = json.load(f)

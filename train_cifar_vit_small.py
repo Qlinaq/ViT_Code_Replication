@@ -14,7 +14,7 @@ else:
 if hasattr(torch, "set_float32_matmul_precision"):
     torch.set_float32_matmul_precision("high")
 
-from ViT_smaller import vit_small  # 同目录下
+from ViT_smaller_SPT_LSA import vit_small  # 同目录下
 
 def get_dataloaders(dataset_name="CIFAR10", input_shape=(128, 128), batch_size=8, num_workers=2):
     train_tf = transforms.Compose([

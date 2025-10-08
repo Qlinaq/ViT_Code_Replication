@@ -12,7 +12,7 @@ else:
 
 print(f"Using device: {device}")
 
-from ViT_smaller import vit_small  # ViT_smaller.py 必须在同目录
+from ViT_smaller_SPT_LSA import vit_small  # ViT_smaller.py 必须在同目录
 
 def get_dataloaders(dataset_name="CIFAR10", input_shape=(128, 128), batch_size=8, num_workers=2):
     train_tf = transforms.Compose([

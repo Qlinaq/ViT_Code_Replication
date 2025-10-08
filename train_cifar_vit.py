@@ -15,7 +15,7 @@ else:
 if hasattr(torch, "set_float32_matmul_precision"):
     torch.set_float32_matmul_precision("high")
 
-from ViT_smaller import vit  # 确保同目录下有 ViT_different_shape.py
+from ViT_smaller_SPT_LSA import vit  # 确保同目录下有 ViT_different_shape.py
 
 def get_dataloaders(dataset_name="CIFAR10", input_shape=(96,96), batch_size=4, num_workers=2):
     # 数据增强与预处理
