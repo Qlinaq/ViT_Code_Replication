@@ -1,12 +1,11 @@
-# vit_tiny_spt_lsa.py
-# Vision Transformer Tiny with optional SPT PatchEmbed and LSA attention.
-# - Custom tanh-approx GELU
-# - SPT Patch Embedding (5x channel concat with half-patch shifts)
-# - Locality Self-Attention: (1) mask patch-to-patch diagonal, (2) 2D relative position bias
-#
+#!/usr/bin/env python3
+# vit_tiny_spt_lsa_cli.py
+# Vision Transformer Tiny with optional SPT and full LSA (diag mask + 2D rel-pos bias + learned temperature).
+# Command-line toggles for SPT/LSA to form baseline and experiment groups.
 # Requirements: torch >= 1.10
 
 import math
+import argparse
 from typing import Optional, Tuple
 
 import torch
@@ -19,7 +18,6 @@ import torch.nn.functional as F
 # =========================
 
 def GELU_fn(x: torch.Tensor) -> torch.Tensor:
-    # Approximate GELU used widely for speed:
     # 0.5 * x * (1 + tanh( sqrt(2/pi) * (x + 0.044715*x^3) ))
     return 0.5 * x * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3))))
 
@@ -168,8 +166,6 @@ class PatchEmbed(nn.Module):
 class RelPosBias2D(nn.Module):
     """
     Learnable 2D relative position bias per head for a fixed patch grid (Gh, Gw).
-    We create a parameter table of shape [(2Gh-1) * (2Gw-1), num_heads] and index into it.
-    For inputs with the same grid, we reuse the precomputed index. If grid changes, we rebuild.
     """
     def __init__(self, Gh: int, Gw: int, num_heads: int):
         super().__init__()
@@ -233,9 +229,10 @@ class MLP(nn.Module):
 
 class Attention(nn.Module):
     """
-    Multi-Head Self-Attention with optional LSA:
-    - Diagonal masking on patch-to-patch (exclude cls at index 0)
+    Multi-Head Self-Attention with optional full LSA:
+    - Diagonal masking on patch-to-patch (exclude CLS at index 0)
     - Learnable 2D relative position bias (added to attention logits)
+    - Learnable per-head temperature (positive), applies as logits / temp_h
     """
     def __init__(
         self,
@@ -259,13 +256,25 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-        # Relative position bias only for patch tokens; we'll pad for CLS inside forward
+        # LSA components
         if self.use_lsa:
             assert grid_hw is not None, "grid_hw (Gh, Gw) must be provided when use_lsa=True"
             Gh, Gw = grid_hw
             self.rel_pos = RelPosBias2D(Gh, Gw, num_heads)
+            # Learnable temperature per head, positive via softplus
+            self.log_temp = nn.Parameter(torch.zeros(num_heads))  # temp_h = softplus(log_temp_h) ~ 0.693 at 0
+            # Prebuild diag mask buffer for patch-to-patch
+            Np = Gh * Gw
+            N = Np + 1  # +1 for CLS
+            mask = torch.zeros(N, N, dtype=torch.bool)
+            if N > 1:
+                patch_N = N - 1
+                mask[1:, 1:] = torch.eye(patch_N, dtype=torch.bool)
+            self.register_buffer("diag_mask", mask, persistent=False)
         else:
             self.rel_pos = None
+            self.log_temp = None
+            self.register_buffer("diag_mask", None, persistent=False)
 
         self.apply(self._init_weights)
 
@@ -281,30 +290,28 @@ class Attention(nn.Module):
         qkv = qkv.reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)  # (3, B, H, N, Hd)
         q, k, v = qkv[0], qkv[1], qkv[2]  # each: (B, H, N, Hd)
 
-        attn = (q * self.scale) @ k.transpose(-2, -1)  # (B, H, N, N)
+        # Base scaled dot-product
+        attn_logits = (q * self.scale) @ k.transpose(-2, -1)  # (B, H, N, N)
 
         if self.use_lsa:
             # 1) Add 2D relative position bias to patch-to-patch logits
-            #    rel_pos: [Gh*Gw, Gh*Gw, H] -> expand to [1, H, Np, Np]
-            #    Then we pad to include the CLS token at index 0 (zeros on cls rows/cols).
-            Hh = self.rel_pos.rel_pos_index.shape[0]  # Gh*Gw
-            assert N == Hh + 1, f"With LSA, expected N = 1 + Gh*Gw. Got N={N}, Gh*Gw={Hh}."
+            Np = self.rel_pos.rel_pos_index.shape[0]  # Gh*Gw
+            assert N == Np + 1, f"With LSA, expected N = 1 + Gh*Gw. Got N={N}, Gh*Gw={Np}."
             rpb = self.rel_pos()                      # [Np, Np, H]
             rpb = rpb.permute(2, 0, 1).unsqueeze(0)   # [1, H, Np, Np]
-            # Pad for CLS at [0,0], so target is [1, H, N, N]
+            # Pad for CLS at [0,0] to [1, H, N, N]
             pad_rpb = torch.zeros((1, self.num_heads, N, N), device=x.device, dtype=rpb.dtype)
             pad_rpb[:, :, 1:, 1:] = rpb
-            attn = attn + pad_rpb
+            attn_logits = attn_logits + pad_rpb
 
-            # 2) Diagonal masking for patch-to-patch (do not mask cls interactions)
-            #    mask shape: [N, N], True where we want -inf (patch-patch diagonal)
-            if N > 1:
-                patch_N = N - 1
-                mask = torch.zeros(N, N, device=x.device, dtype=torch.bool)
-                mask[1:, 1:] = torch.eye(patch_N, dtype=torch.bool, device=x.device)
-                attn = attn.masked_fill(mask, float('-inf'))
+            # 2) Learned temperature per head (positive), logits /= temp_h
+            temp = torch.nn.functional.softplus(self.log_temp).view(1, -1, 1, 1)  # [1, H, 1, 1]
+            attn_logits = attn_logits / temp
 
-        attn = attn.softmax(dim=-1)
+            # 3) Diagonal masking for patch-to-patch (keep CLS interactions)
+            attn_logits = attn_logits.masked_fill(self.diag_mask.unsqueeze(0).unsqueeze(0), float('-inf'))
+
+        attn = attn_logits.softmax(dim=-1)
         attn = self.attn_drop(attn)
 
         out = attn @ v  # (B, H, N, Hd)
@@ -357,10 +364,10 @@ class Block(nn.Module):
 
 class VisionTransformer(nn.Module):
     """
-    ViT-Tiny/16 backbone with options:
+    ViT-Tiny/16 with options:
       - use_spt: Shifted Patch Tokenization
-      - use_lsa: Locality Self-Attention (diagonal mask + 2D rel-pos bias)
-      - tanh-approx GELU throughout MLPs
+      - use_lsa: Locality Self-Attention (diag mask + 2D rel-pos + learned temperature)
+      - tanh-approx GELU in MLPs
     Default Tiny config: embed_dim=192, depth=12, num_heads=3, mlp_ratio=4.0
     """
     def __init__(
@@ -420,7 +427,7 @@ class VisionTransformer(nn.Module):
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.dist_token = nn.Parameter(torch.zeros(1, 1, embed_dim)) if distilled else None
 
-        # Positional embedding (learnable, interpolated if needed)
+        # Positional embedding (learnable)
         extra_tokens = 2 if distilled else 1
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + extra_tokens, embed_dim))
         self.pos_drop = nn.Dropout(p=drop_rate)
@@ -466,30 +473,6 @@ class VisionTransformer(nn.Module):
             if self.head_dist.bias is not None:
                 nn.init.zeros_(self.head_dist.bias)
 
-    def interpolate_pos_encoding(self, x, w: int, h: int):
-        N = x.shape[1]
-        if N == self.pos_embed.shape[1]:
-            return self.pos_embed
-
-        if self.distilled:
-            cls_pos = self.pos_embed[:, :2]
-            patch_pos = self.pos_embed[:, 2:]
-        else:
-            cls_pos = self.pos_embed[:, :1]
-            patch_pos = self.pos_embed[:, 1:]
-
-        num_patches = patch_pos.shape[1]
-        dim = patch_pos.shape[-1]
-
-        gs_old = int(math.sqrt(num_patches))
-        gs_new = (h // self.patch_embed.patch_size if hasattr(self.patch_embed, "patch_size") else h // 16,
-                  w // self.patch_embed.patch_size if hasattr(self.patch_embed, "patch_size") else w // 16)
-
-        patch_pos = patch_pos.reshape(1, gs_old, gs_old, dim).permute(0, 3, 1, 2)
-        patch_pos = F.interpolate(patch_pos, size=gs_new, mode='bicubic', align_corners=False)
-        patch_pos = patch_pos.permute(0, 2, 3, 1).reshape(1, gs_new[0] * gs_new[1], dim)
-        return torch.cat((cls_pos, patch_pos), dim=1)
-
     def forward_features(self, x):
         B, C, H, W = x.shape
         x = self.patch_embed(x)  # [B, N, C]
@@ -501,12 +484,7 @@ class VisionTransformer(nn.Module):
         else:
             x = torch.cat((cls_tokens, x), dim=1)               # [B, 1+N, C]
 
-        if (H, W) != self.img_size:
-            pos_embed = self.interpolate_pos_encoding(x, W, H)
-        else:
-            pos_embed = self.pos_embed
-
-        x = x + pos_embed
+        x = x + self.pos_embed
         x = self.pos_drop(x)
 
         for blk in self.blocks:
@@ -533,7 +511,7 @@ class VisionTransformer(nn.Module):
 
 
 # =========================
-# Factory helpers
+# Factory helper
 # =========================
 
 def vit_tiny_patch16_224(
@@ -567,19 +545,112 @@ def vit_tiny_patch16_224(
 
 
 # =========================
-# Quick test
+# Minimal training demo (optional)
 # =========================
 
+def demo_train(args):
+    device = torch.device(args.device)
+    model = vit_tiny_patch16_224(
+        num_classes=args.num_classes,
+        img_size=args.img_size,
+        drop_rate=args.drop_rate,
+        attn_drop_rate=args.attn_drop_rate,
+        drop_path_rate=args.drop_path_rate,
+        use_spt=args.spt,
+        use_lsa=args.lsa,
+    ).to(device)
+
+    if args.print_model:
+        print(model)
+
+    # Toy data: random tensors (for API smoke test only)
+    model.train()
+    optim = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
+    loss_fn = nn.CrossEntropyLoss()
+
+    for epoch in range(args.epochs):
+        total_loss = 0.0
+        for it in range(args.iters_per_epoch):
+            x = torch.randn(args.batch_size, 3, args.img_size, args.img_size, device=device)
+            y = torch.randint(0, args.num_classes, (args.batch_size,), device=device)
+
+            with torch.cuda.amp.autocast(enabled=(device.type == "cuda")):
+                logits = model(x)
+                loss = loss_fn(logits, y)
+
+            scaler.scale(loss).backward()
+            scaler.step(optim)
+            scaler.update()
+            optim.zero_grad(set_to_none=True)
+            total_loss += loss.item()
+
+        avg = total_loss / max(1, args.iters_per_epoch)
+        print(f"Epoch {epoch}: loss={avg:.4f}")
+
+    # Quick inference
+    model.eval()
+    with torch.no_grad():
+        x = torch.randn(args.batch_size, 3, args.img_size, args.img_size, device=device)
+        logits = model(x)
+        print("Eval logits shape:", logits.shape)
+
+
+# =========================
+# CLI
+# =========================
+
+def parse_args():
+    p = argparse.ArgumentParser(description="ViT-Tiny with optional SPT and full LSA (diag mask + rel-pos + learned temp)")
+    # Model
+    p.add_argument("--img-size", type=int, default=224)
+    p.add_argument("--num-classes", type=int, default=1000)
+    p.add_argument("--drop-rate", type=float, default=0.0)
+    p.add_argument("--attn-drop-rate", type=float, default=0.0)
+    p.add_argument("--drop-path-rate", type=float, default=0.0)
+    # Toggles
+    p.add_argument("--spt", action="store_true", help="Enable SPT patch embedding")
+    p.add_argument("--lsa", action="store_true", help="Enable full LSA (diag mask + 2D rel-pos + learned temperature)")
+    p.add_argument("--print-model", action="store_true")
+    # Train demo
+    p.add_argument("--epochs", type=int, default=0, help=">0 to run a toy training loop")
+    p.add_argument("--iters-per-epoch", type=int, default=10)
+    p.add_argument("--batch-size", type=int, default=8)
+    p.add_argument("--lr", type=float, default=1e-3)
+    p.add_argument("--weight-decay", type=float, default=0.01)
+    p.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    return p.parse_args()
+
+
+def main():
+    args = parse_args()
+
+    # Build once and sanity check forward
+    device = torch.device(args.device)
+    model = vit_tiny_patch16_224(
+        num_classes=args.num_classes,
+        img_size=args.img_size,
+        drop_rate=args.drop_rate,
+        attn_drop_rate=args.attn_drop_rate,
+        drop_path_rate=args.drop_path_rate,
+        use_spt=args.spt,
+        use_lsa=args.lsa,
+    ).to(device)
+
+    if args.print_model:
+        print(model)
+
+    # Quick forward to verify shapes
+    model.eval()
+    x = torch.randn(2, 3, args.img_size, args.img_size, device=device)
+    with torch.no_grad():
+        y = model(x)
+    print(f"Forward OK. Output shape: {tuple(y.shape)}  | SPT={args.spt} LSA={args.lsa}")
+
+    # Optional toy train
+    if args.epochs > 0:
+        demo_train(args)
+
+
 if __name__ == "__main__":
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    # 1) Plain ViT-Tiny + GELU (tanh approx)
-    m_plain = vit_tiny_patch16_224(num_classes=100, img_size=224, drop_path_rate=0.05, use_spt=False, use_lsa=False).to(device)
-    x = torch.randn(2, 3, 224, 224, device=device)
-    y = m_plain(x)
-    print("[Plain] logits:", y.shape)
-
-    # 2) ViT-Tiny + SPT + LSA
-    m_spt_lsa = vit_tiny_patch16_224(num_classes=100, img_size=224, drop_path_rate=0.05, use_spt=True, use_lsa=True).to(device)
-    y2 = m_spt_lsa(x)
-    print("[SPT+LSA] logits:", y2.shape)
+    main()
