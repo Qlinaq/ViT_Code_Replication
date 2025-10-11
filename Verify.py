@@ -1,5 +1,5 @@
 import torch
-from ViT import PatchEmbed, Add_CLS_Token
+from ViT_Base16 import PatchEmbed, Add_CLS_Token
 
 def verify_patch_embed():
     """

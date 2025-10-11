@@ -6,7 +6,7 @@ import json
 
 # ====== 1. 加载 ViT 模型 ======
 # 导入模型构造函数
-from ViT_different_shape import vit, device
+from ViT_Base16 import vit, device
 
 # 设置输入尺寸
 input_shape = [231, 240]
