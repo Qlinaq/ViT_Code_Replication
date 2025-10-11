@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# ViT_Tiny_Basic_Aug_Test.py
 # Compare baseline vs. basic data augmentation; now supports Mixup and CutMix.
 # Requires: torch, torchvision
 # Expects: ViT_Tiny_Basic_Aug.py (with vit_tiny_patch16_224) and mixup_cutmix.py in the same directory.
