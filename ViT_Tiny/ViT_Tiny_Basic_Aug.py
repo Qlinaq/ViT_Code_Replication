@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# vit_tiny_spt_lsa_cli.py
 # Vision Transformer Tiny with optional SPT and full LSA (diag mask + 2D rel-pos bias + learned temperature).
 # Command-line toggles for SPT/LSA to form baseline and experiment groups.
 # Requirements: torch >= 1.10, torchvision >= 0.11
@@ -12,9 +11,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# 新增：用于数据增广与加载
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
+from mixup_cutmix import apply_mixup_cutmix
+from SPT import SPT_PatchEmbed
+from LSA import RelPosBias2D
+from parse_aug import parse_args
+
 
 
 # =========================
@@ -62,71 +65,6 @@ class DropPath(nn.Module):
 # SPT Patch Embedding
 # =========================
 
-class SPT_PatchEmbed(nn.Module):
-    """
-    Shifted Patch Tokenization (SPT):
-    - 将原图与四个半个patch位移的图像在通道维拼接。
-    - 之后用 kernel=stride=patch_size 的卷积投影到patch特征。
-    """
-    def __init__(
-        self,
-        input_shape=(224, 224),
-        patch_size=16,
-        in_channels=3,
-        num_features=192,
-        norm_layer: Optional[nn.Module] = None,
-        flatten: bool = True,
-    ):
-        super().__init__()
-        assert isinstance(patch_size, int), "SPT assumes square patch_size (int)."
-        self.patch_size = patch_size
-        self.flatten = flatten
-
-        H, W = input_shape
-        assert H % patch_size == 0 and W % patch_size == 0, "Input must be divisible by patch_size."
-        self.num_patches = (H // patch_size) * (W // patch_size)
-
-        # SPT 后通道变为 in_channels * 5
-        self.proj = nn.Conv2d(in_channels * 5, num_features, kernel_size=patch_size, stride=patch_size, bias=True)
-        self.norm = norm_layer(num_features) if norm_layer else nn.Identity()
-
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, nn.Conv2d):
-            nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-            if m.bias is not None:
-                nn.init.zeros_(m.bias)
-
-    def shift(self, x: torch.Tensor, direction: str) -> torch.Tensor:
-        # x: [B, C, H, W]
-        shift = self.patch_size // 2
-        if shift == 0:
-            return x
-        if direction == 'left-up':
-            return F.pad(x[..., :-shift, :-shift], (shift, 0, shift, 0))
-        elif direction == 'right-up':
-            return F.pad(x[..., :-shift, shift:], (0, shift, shift, 0))
-        elif direction == 'left-down':
-            return F.pad(x[..., shift:, :-shift], (shift, 0, 0, shift))
-        elif direction == 'right-down':
-            return F.pad(x[..., shift:, shift:], (0, shift, 0, shift))
-        else:
-            raise ValueError(f"Unknown shift direction: {direction}")
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: [B, C, H, W]
-        x_list = [x]
-        for d in ['left-up', 'right-up', 'left-down', 'right-down']:
-            x_list.append(self.shift(x, d))
-        x_cat = torch.cat(x_list, dim=1)     # [B, 5C, H, W]
-        x = self.proj(x_cat)                 # [B, F, H/ps, W/ps]
-        if self.flatten:
-            x = x.flatten(2).transpose(1, 2) # [B, N, F]
-        x = self.norm(x)
-        return x
-
-
 # =========================
 # Standard (non-SPT) Patch Embedding
 # =========================
@@ -166,39 +104,6 @@ class PatchEmbed(nn.Module):
 # =========================
 # 2D Relative Position Bias (for LSA)
 # =========================
-
-class RelPosBias2D(nn.Module):
-    """
-    为固定patch网格 (Gh, Gw) 的每个head学习2D相对位置偏置。
-    """
-    def __init__(self, Gh: int, Gw: int, num_heads: int):
-        super().__init__()
-        self.num_heads = num_heads
-        self.Gh = Gh
-        self.Gw = Gw
-        self.register_parameter(
-            "rel_pos_table",
-            nn.Parameter(torch.zeros((2 * Gh - 1) * (2 * Gw - 1), num_heads))
-        )
-        trunc_normal_(self.rel_pos_table, std=0.02)
-
-        # 预计算 (Gh*Gw, Gh*Gw) 的索引
-        coords_h = torch.arange(Gh)
-        coords_w = torch.arange(Gw)
-        coords = torch.stack(torch.meshgrid(coords_h, coords_w, indexing='ij'))  # [2, Gh, Gw]
-        coords_flat = torch.flatten(coords, 1)                                    # [2, Gh*Gw]
-        rel_coords = coords_flat[:, :, None] - coords_flat[:, None, :]            # [2, Gh*Gw, Gh*Gw]
-        rel_coords = rel_coords.permute(1, 2, 0).contiguous()                     # [Gh*Gw, Gh*Gw, 2]
-        rel_coords[:, :, 0] += Gh - 1
-        rel_coords[:, :, 1] += Gw - 1
-        rel_coords[:, :, 0] *= 2 * Gw - 1
-        rel_pos_index = rel_coords[:, :, 0] + rel_coords[:, :, 1]                 # [Gh*Gw, Gh*Gw]
-        self.register_buffer("rel_pos_index", rel_pos_index, persistent=False)
-
-    def forward(self) -> torch.Tensor:
-        # 返回 [Gh*Gw, Gh*Gw, num_heads]
-        bias = self.rel_pos_table[self.rel_pos_index.view(-1)].view(self.Gh * self.Gw, self.Gh * self.Gw, self.num_heads)
-        return bias
 
 
 # =========================
@@ -703,7 +608,11 @@ def demo_train(args):
     # 优化器与损失
     optim = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
-    loss_fn = nn.CrossEntropyLoss()
+    #loss_fn = nn.CrossEntropyLoss()
+
+
+    #让标签平滑处理，使得模型更健壮，避免过拟合
+    loss_fn = nn.CrossEntropyLoss(label_smoothing=args.smoothing)
 
     if train_loader is None:
         # ============ 玩具训练（无真实数据路径） ============
@@ -747,9 +656,21 @@ def demo_train(args):
             images = images.to(device, non_blocking=True)
             targets = targets.to(device, non_blocking=True)
 
+            images, targets_a, targets_b, lam = apply_mixup_cutmix(
+            images, targets,
+            use_mixup=args.mixup, use_cutmix=args.cutmix,
+            mixup_alpha=args.mixup_alpha, cutmix_alpha=args.cutmix_alpha
+            )
+
             with torch.cuda.amp.autocast(enabled=(device.type == "cuda")):
                 logits = model(images)
-                loss = loss_fn(logits, targets)
+                if lam is None:
+                 # 未启用 mixup/cutmix，常规损失
+                    loss = loss_fn(logits, targets)
+                
+                # mixup/cutmix：加权损失；label smoothing 在 loss_fn 内部生效
+                else:
+                    loss = lam * loss_fn(logits, targets_a) + (1.0 - lam) * loss_fn(logits, targets_b)
 
             scaler.scale(loss).backward()
             scaler.step(optim)
@@ -793,42 +714,6 @@ def demo_train(args):
 # =========================
 # CLI
 # =========================
-
-def parse_args():
-    p = argparse.ArgumentParser(description="ViT-Tiny with optional SPT and full LSA (diag mask + rel-pos + learned temp) + Basic Augmentations")
-    # Model
-    p.add_argument("--img-size", type=int, default=224)
-    p.add_argument("--num-classes", type=int, default=1000, help="当未提供数据路径时使用；若提供data_train，将自动以数据集类数为准")
-    p.add_argument("--drop-rate", type=float, default=0.0)
-    p.add_argument("--attn-drop-rate", type=float, default=0.0)
-    p.add_argument("--drop-path-rate", type=float, default=0.0)
-    # Toggles
-    p.add_argument("--spt", action="store_true", help="启用 SPT patch embedding")
-    p.add_argument("--lsa", action="store_true", help="启用完整 LSA（对角mask + 2D相对位置 + 可学习温度）")
-    p.add_argument("--print-model", action="store_true")
-    # Data paths
-    p.add_argument("--data-train", type=str, default="", help="训练集根目录（ImageFolder）")
-    p.add_argument("--data-val", type=str, default="", help="验证集根目录（ImageFolder，可选）")
-    p.add_argument("--num-workers", type=int, default=4)
-    # Basic augmentations（基础数据增广）
-    p.add_argument("--rrc-scale-min", type=float, default=0.6, help="RandomResizedCrop 最小scale")
-    p.add_argument("--rrc-scale-max", type=float, default=1.0, help="RandomResizedCrop 最大scale")
-    p.add_argument("--hflip", type=float, default=0.5, help="RandomHorizontalFlip 概率")
-    p.add_argument("--vflip", type=float, default=0.0, help="RandomVerticalFlip 概率（某些任务不适合，默认0）")
-    p.add_argument("--color-jitter", type=float, default=0.4, help="ColorJitter 强度，0表示关闭")
-    p.add_argument("--random-erasing", type=float, default=0.25, help="RandomErasing 概率，0表示关闭")
-    p.add_argument("--re-scale-min", type=float, default=0.02, help="RandomErasing scale最小")
-    p.add_argument("--re-scale-max", type=float, default=0.2, help="RandomErasing scale最大")
-    p.add_argument("--re-ratio-min", type=float, default=0.3, help="RandomErasing ratio最小")
-    p.add_argument("--re-ratio-max", type=float, default=3.3, help="RandomErasing ratio最大")
-    # Train
-    p.add_argument("--epochs", type=int, default=0, help=">0 则进行训练；若未提供data路径仍可做玩具训练")
-    p.add_argument("--iters-per-epoch", type=int, default=10, help="玩具训练每epoch迭代数（无真实数据时有效）")
-    p.add_argument("--batch-size", type=int, default=8)
-    p.add_argument("--lr", type=float, default=1e-3)
-    p.add_argument("--weight-decay", type=float, default=0.01)
-    p.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
-    return p.parse_args()
 
 
 def main():
